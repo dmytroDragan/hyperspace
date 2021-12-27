@@ -24,18 +24,24 @@ import com.microsoft.hyperspace.{Hyperspace, HyperspaceException}
 import com.microsoft.hyperspace.actions.Constants.States.{ACTIVE, CREATING, DOESNOTEXIST}
 import com.microsoft.hyperspace.index._
 import com.microsoft.hyperspace.telemetry.{AppInfo, CreateActionEvent, HyperspaceEvent}
-import com.microsoft.hyperspace.util.ResolverUtils
+import com.microsoft.hyperspace.util.{HyperspaceConf, ResolverUtils}
 
 class CreateAction(
-    spark: SparkSession,
+    override val spark: SparkSession,
     df: DataFrame,
-    indexConfig: IndexConfig,
+    indexConfig: IndexConfigTrait,
     final override protected val logManager: IndexLogManager,
     dataManager: IndexDataManager)
     extends CreateActionBase(dataManager)
     with Action {
+  private lazy val (index, indexData) = {
+    updateFileIdTracker(spark, df)
+    val properties = Map.empty ++ hasLineageProperty
+    indexConfig.createIndex(this, df, properties)
+  }
+
   final override def logEntry: LogEntry =
-    getIndexLogEntry(spark, df, indexConfig, indexDataPath, endId)
+    getIndexLogEntry(spark, df, indexConfig.indexName, index, indexDataPath, endId)
 
   final override val transientState: String = CREATING
 
@@ -46,15 +52,25 @@ class CreateAction(
     val provider = Hyperspace.getContext(spark).sourceProviderManager
     if (!provider.isSupportedRelation(df.queryExecution.optimizedPlan)) {
       throw HyperspaceException(
-        "Only creating index over HDFS file based scan nodes is supported.")
+        "Only creating index over HDFS file based scan nodes is supported. " +
+          s"Source plan: ${df.queryExecution.sparkPlan}")
     }
 
-    // schema validity checks
-    if (!isValidIndexSchema(indexConfig, df)) {
+    // Schema validity checks
+
+    // Resolve index config columns from available column names present in the dataframe.
+    val resolvedColumns = ResolverUtils
+      .resolve(spark, indexConfig.referencedColumns, df.queryExecution.analyzed)
+    if (resolvedColumns.isEmpty) {
       throw HyperspaceException("Index config is not applicable to dataframe schema.")
     }
 
-    // valid state check
+    // TODO: Temporarily block creating indexes using nested columns until it's fully supported.
+    if (!(HyperspaceConf.nestedColumnEnabled(spark) || resolvedColumns.get.forall(!_.isNested))) {
+      throw HyperspaceException("Hyperspace does not support nested columns yet.")
+    }
+
+    // Valid state check
     logManager.getLatestLog() match {
       case None => // valid
       case Some(entry) if entry.state.equals(DOESNOTEXIST) => // valid
@@ -64,23 +80,21 @@ class CreateAction(
     }
   }
 
-  private def isValidIndexSchema(config: IndexConfig, dataFrame: DataFrame): Boolean = {
-    // Resolve index config columns from available column names present in the dataframe.
-    ResolverUtils
-      .resolve(
-        spark,
-        config.indexedColumns ++ config.includedColumns,
-        dataFrame.queryExecution.analyzed)
-      .isDefined
-  }
-
   // TODO: The following should be protected, but RefreshAction is calling CreateAction.op().
   //   This needs to be refactored to mark this as protected.
-  final override def op(): Unit = write(spark, df, indexConfig)
+  final override def op(): Unit = index.write(this, indexData)
 
   final override protected def event(appInfo: AppInfo, message: String): HyperspaceEvent = {
     // LogEntry instantiation may fail if index config is invalid. Hence the 'Try'.
     val index = Try(logEntry.asInstanceOf[IndexLogEntry]).toOption
     CreateActionEvent(appInfo, indexConfig, index, df.queryExecution.logical.toString, message)
+  }
+
+  private def hasLineageProperty: Option[(String, String)] = {
+    if (HyperspaceConf.indexLineageEnabled(spark)) {
+      Some(IndexConstants.LINEAGE_PROPERTY -> "true")
+    } else {
+      None
+    }
   }
 }

@@ -47,11 +47,24 @@ class DeltaLakeRelationMetadata(metadata: Relation) extends FileBasedRelationMet
     val deltaVerHistory = metadata.options.get("versionAsOf").map { deltaVersion =>
       val newVersionMapping = s"$indexVersion:$deltaVersion"
       DeltaLakeConstants.DELTA_VERSION_HISTORY_PROPERTY ->
-        properties.get(DeltaLakeConstants.DELTA_VERSION_HISTORY_PROPERTY).map { prop =>
-          s"$prop,$newVersionMapping"
-        }.getOrElse(newVersionMapping)
+        properties
+          .get(DeltaLakeConstants.DELTA_VERSION_HISTORY_PROPERTY)
+          .map { prop =>
+            s"$prop,$newVersionMapping"
+          }
+          .getOrElse(newVersionMapping)
     }
     properties ++ deltaVerHistory
+  }
+
+  /**
+   * Remove DELTA_VERSION_HISTORY_PROPERTY from properties.
+   *
+   * @param properties Index properties to reset.
+   * @return Updated index properties for vacuum outdated data.
+   */
+  def resetDeltaVersionHistory(properties: Map[String, String]): Map[String, String] = {
+    properties - DeltaLakeConstants.DELTA_VERSION_HISTORY_PROPERTY
   }
 
   override def canSupportUserSpecifiedSchema: Boolean = false

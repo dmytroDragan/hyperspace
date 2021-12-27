@@ -20,6 +20,7 @@ import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}
 
 import com.microsoft.hyperspace.actions.Constants
+import com.microsoft.hyperspace.index.covering.CoveringIndex
 
 class IndexTest extends SparkFunSuite {
   val indexConfig1 = IndexConfig("myIndex1", Array("id"), Seq("name"))
@@ -39,13 +40,7 @@ class IndexTest extends SparkFunSuite {
 
     val entry = IndexLogEntry(
       config.indexName,
-      CoveringIndex(
-        CoveringIndex.Properties(
-          CoveringIndex.Properties
-            .Columns(config.indexedColumns, config.includedColumns),
-          IndexLogEntry.schemaString(schema),
-          numBuckets,
-          Map())),
+      CoveringIndex(config.indexedColumns, config.includedColumns, schema, numBuckets, Map()),
       Content(Directory(path)),
       Source(SparkPlan(sourcePlanProperties)),
       Map())

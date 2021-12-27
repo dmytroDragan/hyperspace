@@ -21,6 +21,7 @@ import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructT
 
 import com.microsoft.hyperspace.actions.Constants
 import com.microsoft.hyperspace.index._
+import com.microsoft.hyperspace.index.covering.CoveringIndex
 
 class JsonUtilsTest extends SparkFunSuite {
   test("Test for JsonUtils.") {
@@ -39,12 +40,7 @@ class JsonUtilsTest extends SparkFunSuite {
 
     val index = IndexLogEntry(
       "myIndex",
-      CoveringIndex(
-        CoveringIndex.Properties(
-          CoveringIndex.Properties.Columns(Seq("id"), Seq("name", "school")),
-          IndexLogEntry.schemaString(schema),
-          10,
-          Map())),
+      CoveringIndex(Seq("id"), Seq("name", "school"), schema, 10, Map()),
       Content(Directory("path")),
       Source(SparkPlan(sourcePlanProperties)),
       Map())

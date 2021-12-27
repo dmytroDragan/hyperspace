@@ -37,10 +37,11 @@ class DeltaLakeRelation(spark: SparkSession, override val plan: LogicalRelation)
   /**
    * Computes the signature of the current relation.
    */
-  override def signature: String = plan.relation match {
-    case HadoopFsRelation(location: TahoeLogFileIndex, _, _, _, _, _) =>
-      location.tableVersion + location.path.toString
-  }
+  override def signature: String =
+    plan.relation match {
+      case HadoopFsRelation(location: TahoeLogFileIndex, _, _, _, _, _) =>
+        location.tableVersion + location.path.toString
+    }
 
   /**
    * All the files that the current relation references to.
@@ -57,11 +58,12 @@ class DeltaLakeRelation(spark: SparkSession, override val plan: LogicalRelation)
   /**
    * The optional partition base path of the current relation.
    */
-  override def partitionBasePath: Option[String] = plan.relation match {
-    case HadoopFsRelation(t: TahoeLogFileIndex, _, _, _, _, _) if t.partitionSchema.nonEmpty =>
-      Some(t.path.toString)
-    case _ => None
-  }
+  override def partitionBasePath: Option[String] =
+    plan.relation match {
+      case HadoopFsRelation(t: TahoeLogFileIndex, _, _, _, _, _) if t.partitionSchema.nonEmpty =>
+        Some(t.path.toString)
+      case _ => None
+    }
 
   /**
    * Creates [[Relation]] for IndexLogEntry using the current relation.
@@ -102,7 +104,7 @@ class DeltaLakeRelation(spark: SparkSession, override val plan: LogicalRelation)
               .makeAbsolute(location.path.toString, spark.sessionState.newHadoopConf())
               .toString),
           Hdfs(sourceDataProperties),
-          dataSchema.json,
+          dataSchema,
           fileFormatName,
           opts)
     }
@@ -116,21 +118,11 @@ class DeltaLakeRelation(spark: SparkSession, override val plan: LogicalRelation)
   override def hasParquetAsSourceFormat: Boolean = true
 
   /**
-   * Returns list of pairs of (file path, file id) to build lineage column.
-   *
-   * File paths should be the same format as "input_file_name()" of the given relation type.
-   * input_file_name() could be different depending on the OS and source.
-   *
    * For [[DeltaLakeRelation]], each file path should be in this format:
    *   `file:/path/to/file`
-   *
-   * @param fileIdTracker [[FileIdTracker]] to create the list of (file path, file id).
-   * @return List of pairs of (file path, file id).
    */
-  override def lineagePairs(fileIdTracker: FileIdTracker): Seq[(String, Long)] = {
-    fileIdTracker.getFileToIdMapping.map { kv =>
-      (kv._1._1, kv._2)
-    }
+  override def pathNormalizer: String => String = {
+    identity
   }
 
   private def toFileStatus(fileSize: Long, modificationTime: Long, path: Path): FileStatus = {
@@ -153,7 +145,7 @@ class DeltaLakeRelation(spark: SparkSession, override val plan: LogicalRelation)
     // Versions are comma separated - <index log version>:<delta table version>.
     // e.g. "1:2,3:5,5:9"
     val versions =
-      index.derivedDataset.properties.properties
+      index.derivedDataset.properties
         .getOrElse(DeltaLakeConstants.DELTA_VERSION_HISTORY_PROPERTY, "")
 
     if (versions.nonEmpty) {
@@ -189,8 +181,8 @@ class DeltaLakeRelation(spark: SparkSession, override val plan: LogicalRelation)
     // TODO: Support time travel utilizing Hybrid Scan append-only.
     //   See https://github.com/microsoft/hyperspace/issues/408.
     if (!(HyperspaceConf.hybridScanEnabled(spark) &&
-          HyperspaceConf.hybridScanDeleteEnabled(spark) &&
-          index.hasLineageColumn)) {
+        HyperspaceConf.hybridScanDeleteEnabled(spark) &&
+        index.derivedDataset.canHandleDeletedFiles)) {
       return index
     }
 

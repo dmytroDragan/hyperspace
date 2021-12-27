@@ -19,6 +19,10 @@ package com.microsoft.hyperspace.index
 import org.apache.spark.sql.internal.SQLConf
 
 object IndexConstants {
+  // If it is set as false, Hyperspace will not be applied.
+  val HYPERSPACE_APPLY_ENABLED = "spark.hyperspace.apply.enabled"
+  val HYPERSPACE_APPLY_ENABLED_DEFAULT = "true"
+
   val INDEXES_DIR = "indexes"
 
   // Config used for setting the system path, which is considered as a "root" path for Hyperspace;
@@ -51,6 +55,27 @@ object IndexConstants {
   // not applicable buckets, so it can read less files in case of a highly selective query.
   val INDEX_FILTER_RULE_USE_BUCKET_SPEC = "spark.hyperspace.index.filterRule.useBucketSpec"
   val INDEX_FILTER_RULE_USE_BUCKET_SPEC_DEFAULT = "false"
+
+  // Config to determine max file size for ZOrderCoveringIndex.
+  // It's an approximate value as it's based on the summation of size of source files
+  // which can vary on file format and compression rates.
+  val INDEX_ZORDER_TARGET_SOURCE_BYTES_PER_PARTITION =
+    "spark.hyperspace.index.zorder.targetSourceBytesPerPartition"
+  val INDEX_ZORDER_TARGET_SOURCE_BYTES_PER_PARTITION_DEFAULT = "1073741824" // 1G
+
+  // If enabled, Z-address will be calculated using percentile number for numeric column types
+  // instead of actual column value. It can mitigate skewed data issue. It is disabled by default
+  // as collecting quantiles takes longer than getting only min/max values.
+  val INDEX_ZORDER_QUANTILE_ENABLED = "spark.hyperspace.index.zorder.quantile.enabled"
+  val INDEX_ZORDER_QUANTILE_ENABLED_DEFAULT = "false"
+
+  // relativeError value when collecting approximate quantiles for numeric columns.
+  val INDEX_ZORDER_QUANTILE_RELATIVE_ERROR = "spark.hyperspace.index.zorder.quantile.relativeError"
+  val INDEX_ZORDER_QUANTILE_RELATIVE_ERROR_DEFAULT = "0.01"
+
+  // TODO: Remove dev config when nested column is fully supported.
+  val DEV_NESTED_COLUMN_ENABLED = "spark.hyperspace.dev.index.nestedColumn.enabled"
+  val DEV_NESTED_COLUMN_ENABLED_DEFAULT = "false"
 
   // Identifier injected to HadoopFsRelation as an option if an index is applied.
   // Currently, the identifier is added to options field of HadoopFsRelation.
@@ -113,4 +138,33 @@ object IndexConstants {
   // To provide multiple paths in the globbing pattern, separate them with commas, e.g.
   // "/temp/1/*, /temp/2/*"
   val GLOBBING_PATTERN_KEY = "spark.hyperspace.source.globbingPattern"
+
+  /**
+   * Target size for an index data file for data skipping indexes.
+   *
+   * Data skipping index application starts with filtering the index data with
+   * a translated predicate. Usually it's I/O bound and it's important to have
+   * index data distributed uniformly over files in terms of data size.
+   */
+  val DATASKIPPING_TARGET_INDEX_DATA_FILE_SIZE =
+    "spark.hyperspace.index.dataskipping.targetIndexDataFileSize"
+  val DATASKIPPING_TARGET_INDEX_DATA_FILE_SIZE_DEFAULT = "268435456" // 256 MiB
+
+  /**
+   * Maximum number of index data files.
+   *
+   * The number of index data files determined by targetIndexFileSize is
+   * capped by this value.
+   */
+  val DATASKIPPING_MAX_INDEX_DATA_FILE_COUNT =
+    "spark.hyperspace.index.dataskipping.maxIndexDataFileCount"
+  val DATASKIPPING_MAX_INDEX_DATA_FILE_COUNT_DEFAULT = "10000"
+
+  /**
+   * If set to true, partition sketches for partition columns are included when
+   * creating data skipping indexes. This does not affect existing indexes.
+   */
+  val DATASKIPPING_AUTO_PARTITION_SKETCH =
+    "spark.hyperspace.index.dataskipping.autoPartitionSketch"
+  val DATASKIPPING_AUTO_PARTITION_SKETCH_DEFAULT = "true"
 }

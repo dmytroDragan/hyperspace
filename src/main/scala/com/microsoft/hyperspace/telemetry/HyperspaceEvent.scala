@@ -16,7 +16,7 @@
 
 package com.microsoft.hyperspace.telemetry
 
-import com.microsoft.hyperspace.index.{IndexConfig, IndexLogEntry}
+import com.microsoft.hyperspace.index.{IndexConfigTrait, IndexLogEntry}
 
 /**
  * Class for common app info.
@@ -48,7 +48,7 @@ trait HyperspaceIndexCRUDEvent extends HyperspaceEvent
  */
 case class CreateActionEvent(
     appInfo: AppInfo,
-    indexConfig: IndexConfig,
+    indexConfig: IndexConfigTrait,
     index: Option[IndexLogEntry],
     originalPlan: String,
     message: String)
@@ -85,6 +85,16 @@ case class VacuumActionEvent(appInfo: AppInfo, index: IndexLogEntry, message: St
     extends HyperspaceIndexCRUDEvent
 
 /**
+ * Deletion of old index files event. Emitted when vacuum is called on an ACTIVE index.
+ *
+ * @param appInfo AppInfo for spark application.
+ * @param index Related index.
+ * @param message Message about event.
+ */
+case class VacuumOutdatedActionEvent(appInfo: AppInfo, index: IndexLogEntry, message: String)
+    extends HyperspaceIndexCRUDEvent
+
+/**
  * Index Refresh Event. Emitted when refresh is called on an index.
  *
  * @param appInfo AppInfo for spark application.
@@ -114,7 +124,7 @@ case class CancelActionEvent(appInfo: AppInfo, index: IndexLogEntry, message: St
  * @param message Message about event.
  */
 case class RefreshIncrementalActionEvent(appInfo: AppInfo, index: IndexLogEntry, message: String)
-  extends HyperspaceIndexCRUDEvent
+    extends HyperspaceIndexCRUDEvent
 
 /**
  * Index Refresh Event for quick mode. Emitted when refresh is called on an index
@@ -125,7 +135,7 @@ case class RefreshIncrementalActionEvent(appInfo: AppInfo, index: IndexLogEntry,
  * @param message Message about event.
  */
 case class RefreshQuickActionEvent(appInfo: AppInfo, index: IndexLogEntry, message: String)
-  extends HyperspaceIndexCRUDEvent
+    extends HyperspaceIndexCRUDEvent
 
 /**
  * Index Optimize Event for index files.
@@ -135,7 +145,7 @@ case class RefreshQuickActionEvent(appInfo: AppInfo, index: IndexLogEntry, messa
  * @param message Message about event.
  */
 case class OptimizeActionEvent(appInfo: AppInfo, index: IndexLogEntry, message: String)
-  extends HyperspaceIndexCRUDEvent
+    extends HyperspaceIndexCRUDEvent
 
 /**
  * Index usage event. This event is emitted when an index is picked instead of original data

@@ -16,8 +16,6 @@
 
 package com.microsoft.hyperspace.index
 
-import java.io.FileNotFoundException
-
 import scala.annotation.tailrec
 import scala.collection.mutable.{HashMap, ListBuffer}
 import scala.collection.mutable
@@ -25,9 +23,8 @@ import scala.collection.mutable
 import com.fasterxml.jackson.annotation.JsonIgnore
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, FileSystem, Path, PathFilter}
-import org.apache.spark.sql.catalyst.catalog.BucketSpec
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
-import org.apache.spark.sql.types.{DataType, StructType}
+import org.apache.spark.sql.types.StructType
 
 import com.microsoft.hyperspace.{BuildInfo, HyperspaceException}
 import com.microsoft.hyperspace.actions.Constants
@@ -53,7 +50,9 @@ case class Content(root: Directory, fingerprint: NoOpFingerprint = NoOpFingerpri
     rec(
       new Path(root.name),
       root,
-      (f, prefix) =>
+      (
+          f,
+          prefix) =>
         FileInfo(new Path(prefix, f.name).toString, f.size, f.modifiedTime, f.id)).toSet
   }
 
@@ -80,19 +79,21 @@ object Content {
    * @param hadoopConfiguration Hadoop configuration.
    * @param pathFilter Filter for accepting paths. The default filter is picked from spark
    *                   codebase, which filters out files like _SUCCESS.
-   * @param throwIfNotExists Throws FileNotFoundException if path is not found. Else creates a
-   *                         blank directory tree with no files.
    * @return Content object with Directory tree starting at root, and containing all leaf files
-   *         from "path" argument.
+   *         from "path" argument. If the given path does not exist, return Content object with
+   *         empty Directory object that represents the path.
    */
   def fromDirectory(
       path: Path,
       fileIdTracker: FileIdTracker,
       hadoopConfiguration: Configuration,
-      pathFilter: PathFilter = PathUtils.DataPathFilter,
-      throwIfNotExists: Boolean = false): Content =
-    Content(Directory.fromDirectory(path, fileIdTracker, pathFilter, hadoopConfiguration,
-      throwIfNotExists))
+      pathFilter: PathFilter = PathUtils.DataPathFilter): Content = {
+    if (path.getFileSystem(hadoopConfiguration).exists(path)) {
+      Content(Directory.fromDirectory(path, fileIdTracker, pathFilter, hadoopConfiguration))
+    } else {
+      Content(Directory.createEmptyDirectory(path))
+    }
+  }
 
   /**
    * Create a Content object from a specified list of leaf files. Any files not listed here will
@@ -102,9 +103,7 @@ object Content {
    * @param fileIdTracker FileIdTracker to keep mapping of file properties to assigned file ids.
    * @return Content object with Directory tree from leaf files.
    */
-  def fromLeafFiles(
-      files: Seq[FileStatus],
-      fileIdTracker: FileIdTracker): Option[Content] = {
+  def fromLeafFiles(files: Seq[FileStatus], fileIdTracker: FileIdTracker): Option[Content] = {
     if (files.nonEmpty) {
       Some(Content(Directory.fromLeafFiles(files, fileIdTracker)))
     } else {
@@ -178,27 +177,20 @@ object Directory {
    * Create a Directory object from a directory path by recursively listing its leaf files. All
    * files from the directory tree will be part of the Directory.
    *
-   * If the directory doesn't exist on file system, it will either throw an exception if
-   * throwIfNotExists flag is set. Otherwise, this will create an empty Directory object
-   * starting at the root, ending at the directory path specified.
-   *
    * @param path Starting directory path under which the files will be considered part of the
    *             Directory object.
    * @param fileIdTracker FileIdTracker to keep mapping of file properties to assigned file ids.
    * @param pathFilter Filter for accepting paths. The default filter is picked from spark
    *                   codebase, which filters out files like _SUCCESS.
-   * @param throwIfNotExists If true, throw FileNotFoundException if path is not found. If set to
-   *                         false, create a blank directory tree with no files.
    * @return Directory tree starting at root, and containing the files from "path" argument.
    */
   def fromDirectory(
       path: Path,
       fileIdTracker: FileIdTracker,
       pathFilter: PathFilter = PathUtils.DataPathFilter,
-      hadoopConfiguration: Configuration = new Configuration,
-      throwIfNotExists: Boolean = false): Directory = {
+      hadoopConfiguration: Configuration = new Configuration): Directory = {
     val fs = path.getFileSystem(hadoopConfiguration)
-    val leafFiles = listLeafFiles(path, pathFilter, throwIfNotExists, fs)
+    val leafFiles = listLeafFiles(path, pathFilter, fs)
 
     if (leafFiles.nonEmpty) {
       fromLeafFiles(leafFiles, fileIdTracker)
@@ -211,7 +203,9 @@ object Directory {
   }
 
   @tailrec
-  private def createEmptyDirectory(path: Path, subDirs: Seq[Directory] = Seq()): Directory = {
+  private[hyperspace] def createEmptyDirectory(
+      path: Path,
+      subDirs: Seq[Directory] = Seq()): Directory = {
     if (path.isRoot) {
       Directory(path.toString, subDirs = subDirs)
     } else {
@@ -230,12 +224,10 @@ object Directory {
    * @param files List of leaf files.
    * @param fileIdTracker FileIdTracker to keep mapping of file properties to assigned file ids.
    *                      Note: If a new leaf file is discovered, the input fileIdTracker gets
-    *                     updated by adding it to the files it is tracking.
+   *                      updated by adding it to the files it is tracking.
    * @return Content object with Directory tree from leaf files.
    */
-  def fromLeafFiles(
-      files: Seq[FileStatus],
-      fileIdTracker: FileIdTracker): Directory = {
+  def fromLeafFiles(files: Seq[FileStatus], fileIdTracker: FileIdTracker): Directory = {
     require(
       files.nonEmpty,
       s"Empty files list found while creating a ${Directory.getClass.getName}.")
@@ -302,17 +294,11 @@ object Directory {
   private def listLeafFiles(
       path: Path,
       pathFilter: PathFilter,
-      throwIfNotExists: Boolean,
       fs: FileSystem): Seq[FileStatus] = {
-    try {
-      val (files, directories) = fs.listStatus(path).partition(_.isFile)
-      // TODO: explore fs.listFiles(recursive = true) for better performance of file listing.
-      files.filter(s => pathFilter.accept(s.getPath)) ++
-        directories.flatMap(d => listLeafFiles(d.getPath, pathFilter, throwIfNotExists, fs))
-    } catch {
-      case _: FileNotFoundException if !throwIfNotExists => Seq()
-      case e: Throwable => throw e
-    }
+    val (files, directories) = fs.listStatus(path).partition(_.isFile)
+    // TODO: explore fs.listFiles(recursive = true) for better performance of file listing.
+    files.filter(s => pathFilter.accept(s.getPath)) ++
+      directories.flatMap(d => listLeafFiles(d.getPath, pathFilter, fs))
   }
 }
 
@@ -320,13 +306,14 @@ object Directory {
 // id is a unique identifier generated by Hyperspace, for each unique combination of
 // file's name, size and modifiedTime.
 case class FileInfo(name: String, size: Long, modifiedTime: Long, id: Long) {
-  override def equals(o: Any): Boolean = o match {
-    case that: FileInfo =>
-      name.equals(that.name) &&
-      size.equals(that.size) &&
-      modifiedTime.equals(that.modifiedTime)
-    case _ => false
-  }
+  override def equals(o: Any): Boolean =
+    o match {
+      case that: FileInfo =>
+        name.equals(that.name) &&
+          size.equals(that.size) &&
+          modifiedTime.equals(that.modifiedTime)
+      case _ => false
+    }
 
   override def hashCode(): Int = {
     name.hashCode + size.hashCode + modifiedTime.hashCode
@@ -341,22 +328,6 @@ object FileInfo {
     } else {
       FileInfo(s.getPath.getName, s.getLen, s.getModificationTime, id)
     }
-  }
-}
-
-// IndexLogEntry-specific CoveringIndex that represents derived dataset.
-case class CoveringIndex(properties: CoveringIndex.Properties) {
-  val kind = "CoveringIndex"
-  val kindAbbr = "CI"
-}
-object CoveringIndex {
-  case class Properties(columns: Properties.Columns,
-    schemaString: String,
-    numBuckets: Int,
-    properties: Map[String, String])
-
-  object Properties {
-    case class Columns(indexed: Seq[String], included: Seq[String])
   }
 }
 
@@ -377,9 +348,7 @@ object LogicalPlanFingerprint {
  * @param appendedFiles Appended files.
  * @param deletedFiles Deleted files.
  */
-case class Update(
-    appendedFiles: Option[Content] = None,
-    deletedFiles: Option[Content] = None)
+case class Update(appendedFiles: Option[Content] = None, deletedFiles: Option[Content] = None)
 
 // IndexLogEntry-specific Hdfs that represents the source data.
 case class Hdfs(properties: Hdfs.Properties) {
@@ -403,14 +372,14 @@ object Hdfs {
  * @param data Source data for the relation.
  *             Hdfs.properties.content captures source data which derived dataset was created from.
  *             Hdfs.properties.update captures any updates since the derived dataset was created.
- * @param dataSchemaJson Schema in json format.
+ * @param dataSchema Schema.
  * @param fileFormat File format name.
  * @param options Options to read the source relation.
  */
 case class Relation(
     rootPaths: Seq[String],
     data: Hdfs,
-    dataSchemaJson: String,
+    dataSchema: StructType,
     fileFormat: String,
     options: Map[String, String])
 
@@ -438,14 +407,11 @@ case class Source(plan: SparkPlan)
  */
 case class IndexLogEntry(
     name: String,
-    derivedDataset: CoveringIndex,
+    derivedDataset: Index,
     content: Content,
     source: Source,
     properties: Map[String, String])
     extends LogEntry(IndexLogEntry.VERSION) {
-
-  def schema: StructType =
-    DataType.fromJson(derivedDataset.properties.schemaString).asInstanceOf[StructType]
 
   def created: Boolean = state.equals(Constants.States.ACTIVE)
 
@@ -498,48 +464,30 @@ case class IndexLogEntry(
     def toFileStatus(f: FileInfo) = {
       new FileStatus(f.size, false, 0, 1, f.modifiedTime, new Path(f.name))
     }
-    copy(
-      source = source.copy(
-        plan = source.plan.copy(
-          properties = source.plan.properties.copy(
-            fingerprint = latestFingerprint,
-            relations = Seq(
-              relations.head.copy(
-                data = relations.head.data.copy(
-                  properties = relations.head.data.properties.copy(
-                    update = Some(
-                      Update(
-                        appendedFiles =
-                          Content.fromLeafFiles(appended.map(toFileStatus), fileIdTracker),
-                        deletedFiles =
-                          Content.fromLeafFiles(deleted.map(toFileStatus), fileIdTracker)))))))))))
+    copy(source = source.copy(plan = source.plan.copy(properties = source.plan.properties.copy(
+      fingerprint = latestFingerprint,
+      relations = Seq(
+        relations.head.copy(data = relations.head.data.copy(properties =
+          relations.head.data.properties.copy(update = Some(Update(
+            appendedFiles = Content.fromLeafFiles(appended.map(toFileStatus), fileIdTracker),
+            deletedFiles =
+              Content.fromLeafFiles(deleted.map(toFileStatus), fileIdTracker)))))))))))
   }
 
-  def bucketSpec: BucketSpec =
-    BucketSpec(
-      numBuckets = numBuckets,
-      bucketColumnNames = indexedColumns,
-      sortColumnNames = indexedColumns)
+  override def equals(o: Any): Boolean =
+    o match {
+      case that: IndexLogEntry =>
+        name.equals(that.name) &&
+          derivedDataset.equals(that.derivedDataset) &&
+          signature.equals(that.signature) &&
+          content.root.equals(that.content.root) &&
+          source.equals(that.source) &&
+          properties.equals(that.properties) &&
+          state.equals(that.state)
+      case _ => false
+    }
 
-  override def equals(o: Any): Boolean = o match {
-    case that: IndexLogEntry =>
-      config.equals(that.config) &&
-        signature.equals(that.signature) &&
-        numBuckets.equals(that.numBuckets) &&
-        content.root.equals(that.content.root) &&
-        source.equals(that.source) &&
-        properties.equals(that.properties) &&
-        state.equals(that.state)
-    case _ => false
-  }
-
-  def numBuckets: Int = derivedDataset.properties.numBuckets
-
-  def config: IndexConfig = IndexConfig(name, indexedColumns, includedColumns)
-
-  def indexedColumns: Seq[String] = derivedDataset.properties.columns.indexed
-
-  def includedColumns: Seq[String] = derivedDataset.properties.columns.included
+  def indexedColumns: Seq[String] = derivedDataset.indexedColumns
 
   def signature: Signature = {
     val sourcePlanSignatures = source.plan.properties.fingerprint.properties.signatures
@@ -547,15 +495,11 @@ case class IndexLogEntry(
     sourcePlanSignatures.head
   }
 
-  def hasLineageColumn: Boolean = {
-    derivedDataset.properties.properties.getOrElse(
-      IndexConstants.LINEAGE_PROPERTY, IndexConstants.INDEX_LINEAGE_ENABLED_DEFAULT).toBoolean
-  }
-
   def hasParquetAsSourceFormat: Boolean = {
     relations.head.fileFormat.equals("parquet") ||
-      derivedDataset.properties.properties.getOrElse(
-        IndexConstants.HAS_PARQUET_AS_SOURCE_FORMAT_PROPERTY, "false").toBoolean
+    derivedDataset.properties
+      .getOrElse(IndexConstants.HAS_PARQUET_AS_SOURCE_FORMAT_PROPERTY, "false")
+      .toBoolean
   }
 
   @JsonIgnore
@@ -566,7 +510,25 @@ case class IndexLogEntry(
   }
 
   override def hashCode(): Int = {
-    config.hashCode + signature.hashCode + numBuckets.hashCode + content.hashCode
+    (name, derivedDataset, signature, content).hashCode
+  }
+
+  /**
+   * Extracts paths to top-level directories paths which
+   * contain the latest version index files.
+   *
+   * @return List of directory paths containing index files for latest index version.
+   */
+  def indexDataDirectoryPaths(): Seq[String] = {
+    var prefix = content.root.name
+    var directory = content.root
+    while (directory.subDirs.size == 1 &&
+      !directory.subDirs.head.name.startsWith(IndexConstants.INDEX_VERSION_DIRECTORY_PREFIX)) {
+      prefix += s"${directory.subDirs.head.name}/"
+      directory = directory.subDirs.head
+    }
+
+    directory.subDirs.map(d => s"$prefix${d.name}")
   }
 
   /**
@@ -583,8 +545,21 @@ case class IndexLogEntry(
     tags.get((plan, tag)).map(_.asInstanceOf[T])
   }
 
+  def getTagValuesForAllPlan[T](tag: IndexLogEntryTag[T]): Seq[(LogicalPlan, T)] = {
+    tags.filter(entry => entry._1._2.equals(tag)).toSeq.map { case (k, v) =>
+      (k._1, v.asInstanceOf[T])
+    }
+  }
+
   def unsetTagValue[T](plan: LogicalPlan, tag: IndexLogEntryTag[T]): Unit = {
     tags.remove((plan, tag))
+  }
+
+  def unsetTagValueForAllPlan[T](tag: IndexLogEntryTag[T]): Unit = {
+    val plansWithTag = tags.keys.filter(_._2.name.equals(tag.name)).map(_._1)
+    plansWithTag.foreach { plan =>
+      tags.remove((plan, tag))
+    }
   }
 
   def withCachedTag[T](plan: LogicalPlan, tag: IndexLogEntryTag[T])(f: => T): T = {
@@ -633,7 +608,7 @@ object IndexLogEntry {
    */
   def create(
       name: String,
-      derivedDataset: CoveringIndex,
+      derivedDataset: Index,
       content: Content,
       source: Source,
       properties: Map[String, String]): IndexLogEntry = {
@@ -642,8 +617,7 @@ object IndexLogEntry {
       derivedDataset,
       content,
       source,
-      properties + ((IndexConstants.HYPERSPACE_VERSION_PROPERTY, BuildInfo.version))
-    )
+      properties + ((IndexConstants.HYPERSPACE_VERSION_PROPERTY, BuildInfo.version)))
   }
 }
 
@@ -656,10 +630,10 @@ class FileIdTracker {
   // Combination of file properties, used as key, to identify a
   // unique file for which an id is generated.
   type key = (
-    String, // Full path.
+      String, // Full path.
       Long, // Size.
-      Long  // Modified time.
-    )
+      Long // Modified time.
+  )
   private val fileToIdMap: mutable.HashMap[key, Long] = mutable.HashMap()
 
   def getMaxFileId: Long = maxId
@@ -684,8 +658,7 @@ class FileIdTracker {
     setSizeHint(files.size)
     files.foreach { f =>
       if (f.id == IndexConstants.UNKNOWN_FILE_ID) {
-        throw HyperspaceException(
-          s"Cannot add file info with unknown id. (file: ${f.name}).")
+        throw HyperspaceException(s"Cannot add file info with unknown id. (file: ${f.name}).")
       }
 
       val key = (f.name, f.size, f.modifiedTime)
@@ -713,10 +686,18 @@ class FileIdTracker {
    */
   def addFile(file: FileStatus): Long = {
     fileToIdMap.getOrElseUpdate(
-      (file.getPath.toString, file.getLen, file.getModificationTime),
-      {
+      (file.getPath.toString, file.getLen, file.getModificationTime), {
         maxId += 1
         maxId
       })
+  }
+
+  /**
+   * Returns a list of pairs of (file id, file path).
+   *
+   * Paths are normalized with the given function, which defaults to identity.
+   */
+  def getIdToFileMapping(normalizePath: String => String = identity): Seq[(Long, String)] = {
+    getFileToIdMapping.map(kv => kv._2 -> normalizePath(kv._1._1))
   }
 }

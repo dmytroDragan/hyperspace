@@ -38,7 +38,7 @@ trait IndexManager {
    * @param indexConfig the configuration of index to be created.
    * @return Index object that stores information about index created.
    */
-  def create(df: DataFrame, indexConfig: IndexConfig): Unit
+  def create(df: DataFrame, indexConfig: IndexConfigTrait): Unit
 
   /**
    * Soft deletes the index with given index name.
@@ -54,7 +54,9 @@ trait IndexManager {
   def restore(indexName: String): Unit
 
   /**
-   * Does hard delete of indexes marked as `DELETED`. Once vacuumed, an index can't be 'restore'd.
+   * If the index is marked as `DELETED`, does hard delete of indexes while does
+   * If it is 'ACTIVE', does clean up of indexes (hard delete of unused index files).
+   * Once vacuumed, hard deleted index files can't be 'restore'd.
    *
    * @param indexName Name of the index to vacuum.
    */

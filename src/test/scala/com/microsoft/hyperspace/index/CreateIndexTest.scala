@@ -105,7 +105,7 @@ class CreateIndexTest extends HyperspaceSuite with SQLHelper {
       indexes.head.getAs[WrappedArray[String]]("indexedColumns").head == "Query",
       "Indexed columns with wrong case are stored in metadata")
     assert(
-      indexes.head.getAs[WrappedArray[String]]("includedColumns").head == "imprs",
+      indexes.head.getAs[Map[String, String]]("additionalStats")("includedColumns") == "imprs",
       "Included columns with wrong case are stored in metadata")
   }
 
@@ -141,12 +141,11 @@ class CreateIndexTest extends HyperspaceSuite with SQLHelper {
   }
 
   test("Index creation fails since the dataframe has a join node.") {
-    val dfJoin = nonPartitionedDataDF
-      .join(nonPartitionedDataDF, nonPartitionedDataDF("Query") === nonPartitionedDataDF("Query"))
-      .select(
-        nonPartitionedDataDF("RGUID"),
-        nonPartitionedDataDF("Query"),
-        nonPartitionedDataDF("imprs"))
+    val dfA = nonPartitionedDataDF.as("A")
+    val dfB = nonPartitionedDataDF.as("B")
+    val dfJoin = dfA
+      .join(dfB, dfA("Query") === dfB("Query"))
+      .select(dfA("RGUID"), dfA("Query"), dfA("imprs"))
     val exception = intercept[HyperspaceException] {
       hyperspace.createIndex(dfJoin, indexConfig1)
     }
@@ -169,7 +168,8 @@ class CreateIndexTest extends HyperspaceSuite with SQLHelper {
     }
   }
 
-  test("Check lineage in index records for partitioned data when partition key is not in config.") {
+  test(
+    "Check lineage in index records for partitioned data when partition key is not in config.") {
     withSQLConf(IndexConstants.INDEX_LINEAGE_ENABLED -> "true") {
       hyperspace.createIndex(partitionedDataDF, indexConfig3)
       val indexRecordsDF = spark.read.parquet(
@@ -199,7 +199,8 @@ class CreateIndexTest extends HyperspaceSuite with SQLHelper {
     }
   }
 
-  test("Check lineage in index records for partitioned data when partition key is in load path.") {
+  test(
+    "Check lineage in index records for partitioned data when partition key is in load path.") {
     withSQLConf(IndexConstants.INDEX_LINEAGE_ENABLED -> "true") {
       val dataDF =
         spark.read.parquet(s"$partitionedDataPath/${partitionKeys.head}=2017-09-03")

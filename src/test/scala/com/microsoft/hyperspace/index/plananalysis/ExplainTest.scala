@@ -176,12 +176,12 @@ class ExplainTest extends SparkFunSuite with HyperspaceSuite {
       .replace("$end", displayMode.beginEndTag.close)
       .replace("$highlightBegin", displayMode.highlightTag.open)
       .replace("$highlightEnd", displayMode.highlightTag.close)
-      .replace("\n", displayMode.newLine)
+      .replace(System.lineSeparator(), displayMode.newLine)
 
     def filterQuery(query: DataFrame): DataFrame = {
       query.filter("Col2 == 2").select("Col1")
     }
-    verifyExplainOutput(df, expectedOutput.toString, verbose = false) { filterQuery }
+    verifyExplainOutput(df, expectedOutput, verbose = false) { filterQuery }
   }
 
   private def getIndexRootPath(indexName: String): Path =

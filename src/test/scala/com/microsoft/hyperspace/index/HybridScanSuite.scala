@@ -30,6 +30,7 @@ import com.microsoft.hyperspace.{Hyperspace, Implicits, SampleData, TestConfig}
 import com.microsoft.hyperspace.TestUtils.logManager
 import com.microsoft.hyperspace.index.execution.BucketUnionExec
 import com.microsoft.hyperspace.index.plans.logical.BucketUnion
+import com.microsoft.hyperspace.shim.{ExtractFileSourceScanExecFilters, ExtractUnionChildren, RepartitionByExpressionWithOptionalNumPartitions}
 import com.microsoft.hyperspace.util.FileUtils
 
 trait HybridScanSuite extends QueryTest with HyperspaceSuite {
@@ -59,7 +60,7 @@ trait HybridScanSuite extends QueryTest with HyperspaceSuite {
   def setupIndexAndChangeData(
       sourceFileFormat: String,
       sourcePath: String,
-      indexConfig: IndexConfig,
+      indexConfig: IndexConfigTrait,
       appendCnt: Int,
       deleteCnt: Int): (Seq[String], Seq[String]) = {
     dfFromSample.write.format(sourceFileFormat).save(sourcePath)
@@ -128,8 +129,8 @@ trait HybridScanSuite extends QueryTest with HyperspaceSuite {
       }.flatten
       val deletedFilesList = plan collect {
         case Filter(
-            Not(EqualTo(left: Attribute, right: Literal)),
-            LogicalRelation(fsRelation: HadoopFsRelation, _, _, _)) =>
+              Not(EqualTo(left: Attribute, right: Literal)),
+              LogicalRelation(fsRelation: HadoopFsRelation, _, _, _)) =>
           // Check new filter condition on lineage column.
           val colName = left.toString
           val deletedFile = right.toString
@@ -141,8 +142,8 @@ trait HybridScanSuite extends QueryTest with HyperspaceSuite {
           assert(files.nonEmpty && files.forall(_.contains(indexName)))
           deleted
         case Filter(
-            Not(InSet(attr, deletedFileIds)),
-            LogicalRelation(fsRelation: HadoopFsRelation, _, _, _)) =>
+              Not(InSet(attr, deletedFileIds)),
+              LogicalRelation(fsRelation: HadoopFsRelation, _, _, _)) =>
           // Check new filter condition on lineage column.
           assert(attr.toString.contains(IndexConstants.DATA_FILE_NAME_ID))
           val deleted = deletedFileIds.map(_.toString).toSeq
@@ -155,8 +156,8 @@ trait HybridScanSuite extends QueryTest with HyperspaceSuite {
           assert(files.nonEmpty && files.forall(_.contains(indexName)))
           deleted
         case Filter(
-            Not(In(attr, deletedFileIds)),
-            LogicalRelation(fsRelation: HadoopFsRelation, _, _, _)) =>
+              Not(In(attr, deletedFileIds)),
+              LogicalRelation(fsRelation: HadoopFsRelation, _, _, _)) =>
           // Check new filter condition on lineage column.
           assert(attr.toString.contains(IndexConstants.DATA_FILE_NAME_ID))
           val deleted = deletedFileIds.map(_.toString)
@@ -178,7 +179,7 @@ trait HybridScanSuite extends QueryTest with HyperspaceSuite {
 
       val execPlan = spark.sessionState.executePlan(plan).executedPlan
       val execNodes = execPlan collect {
-        case p @ FileSourceScanExec(_, _, _, _, _, dataFilters, _) =>
+        case p @ ExtractFileSourceScanExecFilters(_, dataFilters) =>
           // Check deleted files.
           assert(deletedFiles.forall(dataFilters.toString.contains))
           p
@@ -213,10 +214,10 @@ trait HybridScanSuite extends QueryTest with HyperspaceSuite {
             bucketSpec.bucketColumnNames.head === "clicks")
 
         val childNodes = children.collect {
-          case r @ RepartitionByExpression(
+          case r @ RepartitionByExpressionWithOptionalNumPartitions(
                 attrs,
                 Project(_, Filter(_, LogicalRelation(fsRelation: HadoopFsRelation, _, _, _))),
-                numBucket) =>
+                Some(numBucket)) =>
             assert(attrs.size === 1)
             assert(attrs.head.asInstanceOf[Attribute].name.contains("clicks"))
 
@@ -250,10 +251,10 @@ trait HybridScanSuite extends QueryTest with HyperspaceSuite {
             bucketSpec.bucketColumnNames.head === "clicks")
 
         val childNodes = children.collect {
-          case r @ RepartitionByExpression(
+          case r @ RepartitionByExpressionWithOptionalNumPartitions(
                 attrs,
                 Project(_, Filter(_, LogicalRelation(fsRelation: HadoopFsRelation, _, _, _))),
-                numBucket) =>
+                Some(numBucket)) =>
             assert(attrs.size === 1)
             assert(attrs.head.asInstanceOf[Attribute].name.contains("clicks"))
 
@@ -289,11 +290,12 @@ trait HybridScanSuite extends QueryTest with HyperspaceSuite {
         case p @ BucketUnionExec(children, bucketSpec) =>
           assert(children.size === 2)
           // children.head is always the index plan.
-          assert(children.head.isInstanceOf[ProjectExec] || children.head.isInstanceOf[FilterExec])
+          assert(
+            children.head.isInstanceOf[ProjectExec] || children.head.isInstanceOf[FilterExec])
           assert(children.last.isInstanceOf[ShuffleExchangeExec])
           assert(bucketSpec.numBuckets === 200)
           p
-        case p @ FileSourceScanExec(_, _, _, partitionFilters, _, dataFilters, _) =>
+        case p @ ExtractFileSourceScanExecFilters(partitionFilters, dataFilters) =>
           // Check filter pushed down properly.
           if (partitionFilters.nonEmpty) {
             assert(filterConditions.forall(partitionFilters.toString.contains))
@@ -325,7 +327,7 @@ trait HybridScanSuite extends QueryTest with HyperspaceSuite {
 
     if (expectedAppendedFiles.nonEmpty) {
       val nodes = plan.collect {
-        case u @ Union(children) =>
+        case u @ ExtractUnionChildren(children) =>
           val indexChild = children.head
           indexChild collect {
             case LogicalRelation(fsRelation: HadoopFsRelation, _, _, _) =>
@@ -355,7 +357,7 @@ trait HybridScanSuite extends QueryTest with HyperspaceSuite {
             assert(children.head.isInstanceOf[ProjectExec]) // index data
             assert(children.last.isInstanceOf[ProjectExec]) // appended data
             p
-          case p @ FileSourceScanExec(_, _, _, partitionFilters, _, dataFilters, _) =>
+          case p @ ExtractFileSourceScanExecFilters(partitionFilters, dataFilters) =>
             // Check filter pushed down properly.
             if (partitionFilters.nonEmpty) {
               assert(filterConditions.forall(partitionFilters.toString.contains))
@@ -404,7 +406,13 @@ trait HybridScanSuite extends QueryTest with HyperspaceSuite {
       val baseQuery = joinQuery()
       val basePlan = baseQuery.queryExecution.optimizedPlan
 
-      withSQLConf("spark.sql.autoBroadcastJoinThreshold" -> "-1") {
+      // RemoveRedundantProjects rule causes HybridScanForIcebergTest to fail
+      // in Spark 3.1. Either a bug of Spark 3.1, or Iceberg needs to be
+      // updated. Either way, it will take some time to be fixed, so let's
+      // temporarily disable the rule here.
+      withSQLConf(
+        "spark.sql.autoBroadcastJoinThreshold" -> "-1",
+        "spark.sql.execution.removeRedundantProjects" -> "false") {
         withSQLConf(
           SQLConf.WHOLESTAGE_CODEGEN_ENABLED.key -> "false",
           IndexConstants.INDEX_HYBRID_SCAN_ENABLED -> "false") {
@@ -575,7 +583,8 @@ trait HybridScanSuite extends QueryTest with HyperspaceSuite {
     }
   }
 
-  test("Delete-only: join rule, deleted files should be excluded from each index data relation.") {
+  test(
+    "Delete-only: join rule, deleted files should be excluded from each index data relation.") {
     withTempPathAsString { testPath =>
       val deletePath1 = testPath + "/delete1"
       val deletePath2 = testPath + "/delete2"

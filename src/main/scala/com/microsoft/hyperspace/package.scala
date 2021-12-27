@@ -18,21 +18,12 @@ package com.microsoft
 
 import org.apache.spark.sql.SparkSession
 
+import com.microsoft.hyperspace.HyperspaceSparkSessionExtension
 import com.microsoft.hyperspace.index.execution.BucketUnionStrategy
-import com.microsoft.hyperspace.index.rules.{FilterIndexRule, JoinIndexRule}
+import com.microsoft.hyperspace.index.rules.ApplyHyperspace
+import com.microsoft.hyperspace.util.HyperspaceConf
 
 package object hyperspace {
-  // The order of Hyperspace index rules does matter here, because by our current design, once an
-  // index rule is applied to a base table, no further index rules can be applied to the same
-  // table again.
-  // For instance, let's say the Join rule gets applied first, then the original data source gets
-  // replaced by its index. Now we have a new logical plan with the index folder as the "new"
-  // data source. If the Filter rule gets applied on this, no change will happen because
-  // this "new" data source doesn't have any indexes.
-  // We therefore choose to put JoinIndexRule before FilterIndexRule to give join indexes
-  // higher priority, because join indexes typically result in higher performance improvement
-  // compared to filter indexes.
-  private val hyperspaceOptimizationRuleBatch = JoinIndexRule :: FilterIndexRule :: Nil
 
   /**
    * Hyperspace-specific implicit class on SparkSession.
@@ -40,42 +31,65 @@ package object hyperspace {
   implicit class Implicits(sparkSession: SparkSession) {
 
     /**
-     * Plug in Hyperspace-specific rules.
+     * Enable Hyperspace indexes.
+     *
+     * Plug in Hyperspace-specific rules and set `IndexConstants.HYPERSPACE_APPLY_ENABLED` as true.
      *
      * @return a spark session that contains Hyperspace-specific rules.
      */
     def enableHyperspace(): SparkSession = {
-      disableHyperspace
-      sparkSession.sessionState.experimentalMethods.extraOptimizations ++=
-        hyperspaceOptimizationRuleBatch
-      sparkSession.sessionState.experimentalMethods.extraStrategies ++=
-        BucketUnionStrategy :: Nil
+      HyperspaceConf.setHyperspaceApplyEnabled(sparkSession, true)
+      addOptimizationsIfNeeded()
       sparkSession
     }
 
     /**
-     * Plug out Hyperspace-specific rules.
+     * Disable Hyperspace indexes.
      *
-     * @return a spark session that does not contain Hyperspace-specific rules.
+     * Set `IndexConstants.HYPERSPACE_APPLY_ENABLED` as false
+     * to stop applying Hyperspace indexes.
+     *
+     * @return a spark session that `IndexConstants.HYPERSPACE_APPLY_ENABLED` is set as false.
      */
     def disableHyperspace(): SparkSession = {
-      val experimentalMethods = sparkSession.sessionState.experimentalMethods
-      experimentalMethods.extraOptimizations =
-        experimentalMethods.extraOptimizations.filterNot(hyperspaceOptimizationRuleBatch.contains)
-      experimentalMethods.extraStrategies =
-        experimentalMethods.extraStrategies.filterNot(BucketUnionStrategy.equals)
+      HyperspaceConf.setHyperspaceApplyEnabled(sparkSession, false)
       sparkSession
     }
 
     /**
      * Checks if Hyperspace is enabled or not.
      *
+     * Note that Hyperspace is enabled when:
+     * 1) `ApplyHyperspace` exists in extraOptimization
+     * 2) `BucketUnionStrate` exists in extraStrategies and
+     * 3) `IndexConstants.HYPERSPACE_APPLY_ENABLED` is true.
+     *
      * @return true if Hyperspace is enabled or false otherwise.
      */
     def isHyperspaceEnabled(): Boolean = {
       val experimentalMethods = sparkSession.sessionState.experimentalMethods
-      hyperspaceOptimizationRuleBatch.forall(experimentalMethods.extraOptimizations.contains) &&
-        experimentalMethods.extraStrategies.contains(BucketUnionStrategy)
+      experimentalMethods.extraOptimizations.contains(ApplyHyperspace) &&
+      experimentalMethods.extraStrategies.contains(BucketUnionStrategy) &&
+      HyperspaceConf.hyperspaceApplyEnabled(sparkSession)
+    }
+
+    /**
+     * Add ApplyHyperspace and BucketUnionStrategy into extraOptimization
+     * and extraStrategies, respectively, to make Spark can use Hyperspace.
+     *
+     * @param sparkSession Spark session that will use Hyperspace
+     */
+    private[hyperspace] def addOptimizationsIfNeeded(): Unit = {
+      if (!sparkSession.sessionState.experimentalMethods.extraOptimizations.contains(
+          ApplyHyperspace)) {
+        sparkSession.sessionState.experimentalMethods.extraOptimizations ++=
+          ApplyHyperspace :: Nil
+      }
+      if (!sparkSession.sessionState.experimentalMethods.extraStrategies.contains(
+          BucketUnionStrategy)) {
+        sparkSession.sessionState.experimentalMethods.extraStrategies ++=
+          BucketUnionStrategy :: Nil
+      }
     }
   }
 }

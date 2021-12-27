@@ -24,6 +24,7 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, FileSystem, FileUtil, Path}
 import org.apache.spark.internal.Logging
 
+import com.microsoft.hyperspace.HyperspaceException
 import com.microsoft.hyperspace.actions.Constants
 import com.microsoft.hyperspace.util.{FileUtils, JsonUtils}
 
@@ -54,7 +55,7 @@ trait IndexLogManager {
 }
 
 class IndexLogManagerImpl(indexPath: Path, hadoopConfiguration: Configuration = new Configuration)
-  extends IndexLogManager
+    extends IndexLogManager
     with Logging {
   // Use FileContext instead of FileSystem for atomic renames?
   private lazy val fs: FileSystem = indexPath.getFileSystem(hadoopConfiguration)
@@ -71,8 +72,16 @@ class IndexLogManagerImpl(indexPath: Path, hadoopConfiguration: Configuration = 
     if (!fs.exists(path)) {
       return None
     }
+
     val contents = FileUtils.readContents(fs, path)
-    Some(LogEntry.fromJson(contents))
+
+    try {
+      Some(LogEntry.fromJson(contents))
+    } catch {
+      case e: Exception =>
+        throw HyperspaceException(
+          s"Cannot parse JSON in ${path}: ${e.getMessage}")
+    }
   }
 
   override def getLog(id: Int): Option[LogEntry] = {
@@ -102,8 +111,9 @@ class IndexLogManagerImpl(indexPath: Path, hadoopConfiguration: Configuration = 
           if (entry.exists(e => Constants.STABLE_STATES.contains(e.state))) {
             return entry
           }
-          if (entry.exists(e => e.state.equals(Constants.States.CREATING)
-            || e.state.equals(Constants.States.VACUUMING))) {
+          if (entry.exists(e =>
+              e.state.equals(Constants.States.CREATING)
+                || e.state.equals(Constants.States.VACUUMING))) {
             // Do not consider unrelated logs before creating or vacuuming state.
             return None
           }

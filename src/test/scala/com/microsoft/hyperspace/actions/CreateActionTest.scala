@@ -17,13 +17,12 @@
 package com.microsoft.hyperspace.actions
 
 import org.apache.hadoop.fs.Path
-import org.apache.spark.SparkFunSuite
-import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.catalyst.plans.SQLHelper
 import org.apache.spark.sql.catalyst.plans.logical.LeafNode
 import org.mockito.Mockito._
 
-import com.microsoft.hyperspace.{HyperspaceException, SampleData, SparkInvolvedSuite}
+import com.microsoft.hyperspace.{HyperspaceException, SampleData}
 import com.microsoft.hyperspace.actions.Constants.States._
 import com.microsoft.hyperspace.index._
 import com.microsoft.hyperspace.index.sources.FileBasedSourceProviderManager
@@ -38,7 +37,9 @@ class CreateActionTest extends HyperspaceSuite with SQLHelper {
   private val mockLogManager: IndexLogManager = mock(classOf[IndexLogManager])
   private val mockDataManager: IndexDataManager = mock(classOf[IndexDataManager])
 
+  private val sparkSession = spark
   object CreateActionBaseWrapper extends CreateActionBase(mockDataManager) {
+    override def spark: SparkSession = sparkSession
     def getSourceRelations(df: DataFrame): Seq[Relation] = {
       val provider = new FileBasedSourceProviderManager(spark)
       df.queryExecution.optimizedPlan.collect {
@@ -82,7 +83,9 @@ class CreateActionTest extends HyperspaceSuite with SQLHelper {
     val action = new CreateAction(spark, df, indexConfig, mockLogManager, mockDataManager)
     val ex = intercept[HyperspaceException](action.validate())
     assert(
-      ex.getMessage.contains("Only creating index over HDFS file based scan nodes is supported"))
+      ex.getMessage.contains(
+        "Only creating index over HDFS file based scan nodes is supported. " +
+          "Source plan: LocalTableScan "))
   }
 
   test("validate() fails if index config doesn't contain columns from df") {
@@ -114,15 +117,35 @@ class CreateActionTest extends HyperspaceSuite with SQLHelper {
       ex.getMessage.contains(s"Another Index with name ${indexConfig.indexName} already exists"))
   }
 
-  test("op() fails if index config is of wrong case and spark is case-sensitive") {
+  test("op() fails if indexed column is of wrong case and spark is case-sensitive") {
     when(mockLogManager.getLatestLog()).thenReturn(Some(TestLogEntry(ACTIVE)))
-    val indexConfig = IndexConfig("index1", Seq("rgUID"), Seq("dATE"))
+    val indexConfig = IndexConfig("index1", Seq("rgUID"), Seq("Date"))
     val action = new CreateAction(spark, df, indexConfig, mockLogManager, mockDataManager)
     withSQLConf("spark.sql.caseSensitive" -> "true") {
       val ex = intercept[HyperspaceException](action.op())
       assert(
-        ex.getMessage.contains("Columns 'rgUID,dATE' could not be resolved from available " +
-          "source columns:\n" +
+        ex.getMessage.contains(
+          "Columns 'rgUID' could not be resolved from available " +
+            "source columns:\n" +
+            "root\n " +
+            "|-- Date: string (nullable = true)\n " +
+            "|-- RGUID: string (nullable = true)\n " +
+            "|-- Query: string (nullable = true)\n " +
+            "|-- imprs: integer (nullable = true)\n " +
+            "|-- clicks: integer (nullable = true)"))
+    }
+  }
+
+  test("op() fails if included config is of wrong case and spark is case-sensitive") {
+    when(mockLogManager.getLatestLog()).thenReturn(Some(TestLogEntry(ACTIVE)))
+    val indexConfig = IndexConfig("index1", Seq("RGUID"), Seq("dATE"))
+    val action = new CreateAction(spark, df, indexConfig, mockLogManager, mockDataManager)
+    withSQLConf("spark.sql.caseSensitive" -> "true") {
+      val ex = intercept[HyperspaceException](action.op())
+      assert(
+        ex.getMessage.contains(
+          "Columns 'dATE' could not be resolved from available " +
+            "source columns:\n" +
             "root\n " +
             "|-- Date: string (nullable = true)\n " +
             "|-- RGUID: string (nullable = true)\n " +
@@ -150,31 +173,35 @@ class CreateActionTest extends HyperspaceSuite with SQLHelper {
         .write
         .parquet(path2)
 
-      Seq(
-        (spark.read.format("parquet").load(path1), Seq(path1), 2),
-        (spark.read.format("parquet").load(path1, path2), Seq(path1, path2), 5),
-        (spark.read.parquet(path1), Seq(path1), 2),
-        (spark.read.parquet(path1, path2), Seq(path1, path2), 5),
-        (spark.read.parquet(path1, path1, path1), Seq(path1, path1, path1), 6),
-        (spark.read.format("parquet").option("path", path1).load(path1), Seq(path1), 2),
-        (spark.read.format("parquet").option("path", path1).load(path2), Seq(path2), 3),
-        (spark.read.option("path", path1).parquet(path1), Seq(path1, path1), 4),
-        (spark.read.option("path", path1).parquet(path2), Seq(path1, path2), 5),
-        (
-          spark.read.format("parquet").option("path", path1).load(path1, path2),
-          Seq(path1, path1, path2),
-          7),
-        (spark.read.option("path", path1).parquet(path1, path2), Seq(path1, path1, path2), 7))
-        .foreach {
-          case (df, expectedPaths, expectedCount) =>
-            val relation = CreateActionBaseWrapper.getSourceRelations(df).head
-            def normalize(path: String): String = {
-              new Path(path).toUri.getPath
-            }
-            assert(relation.rootPaths.map(normalize) == expectedPaths.map(normalize))
-            assert(df.count == expectedCount)
-            assert(!relation.options.isDefinedAt("path"))
-        }
+      // For Spark 3.1 - pathOptionBehavior must be enabled manually
+      // for inconsistent use of option("path") and load(paths...)
+      withSQLConf("spark.sql.legacy.pathOptionBehavior.enabled" -> "true") {
+        Seq(
+          (spark.read.format("parquet").load(path1), Seq(path1), 2),
+          (spark.read.format("parquet").load(path1, path2), Seq(path1, path2), 5),
+          (spark.read.parquet(path1), Seq(path1), 2),
+          (spark.read.parquet(path1, path2), Seq(path1, path2), 5),
+          (spark.read.parquet(path1, path1, path1), Seq(path1, path1, path1), 6),
+          (spark.read.format("parquet").option("path", path1).load(path1), Seq(path1), 2),
+          (spark.read.format("parquet").option("path", path1).load(path2), Seq(path2), 3),
+          (spark.read.option("path", path1).parquet(path1), Seq(path1, path1), 4),
+          (spark.read.option("path", path1).parquet(path2), Seq(path1, path2), 5),
+          (
+            spark.read.format("parquet").option("path", path1).load(path1, path2),
+            Seq(path1, path1, path2),
+            7),
+          (spark.read.option("path", path1).parquet(path1, path2), Seq(path1, path1, path2), 7))
+          .foreach {
+            case (df, expectedPaths, expectedCount) =>
+              val relation = CreateActionBaseWrapper.getSourceRelations(df).head
+              def normalize(path: String): String = {
+                new Path(path).toUri.getPath
+              }
+              assert(relation.rootPaths.map(normalize) == expectedPaths.map(normalize))
+              assert(df.count == expectedCount)
+              assert(!relation.options.isDefinedAt("path"))
+          }
+      }
     }
   }
 }

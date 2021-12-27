@@ -106,6 +106,11 @@ trait FileBasedRelation extends SourceRelation {
   def partitionBasePath: Option[String]
 
   /**
+   * Returns [[FileIndex]] for the current relation.
+   */
+  def getOrCreateFileIndex(spark: SparkSession): FileIndex
+
+  /**
    * Creates [[HadoopFsRelation]] based on the current relation.
    *
    * This is mainly used in conjunction with [[createLogicalRelation]].
@@ -140,9 +145,11 @@ trait FileBasedRelation extends SourceRelation {
   def hasParquetAsSourceFormat: Boolean
 
   /**
-   * Returns list of pairs of (file path, file id) to build lineage column.
+   * Returns a function that takes a file path returned by a relation and
+   * returns a normalized path that has the same format as the output of
+   * input_file_name().
    */
-  def lineagePairs(fileIdTracker: FileIdTracker): Seq[(String, Long)]
+  def pathNormalizer: String => String
 
   /**
    * Returns IndexLogEntry of the closest version for the given index.

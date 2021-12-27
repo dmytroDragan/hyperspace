@@ -19,22 +19,19 @@ package com.microsoft.hyperspace.index
 import org.apache.commons.lang.StringUtils
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.Path
-import org.apache.iceberg.{PartitionSpec => IcebergPartitionSpec, Table, TableProperties}
-import org.apache.iceberg.hadoop.HadoopTables
-import org.apache.iceberg.spark.SparkSchemaUtil
 import org.apache.spark.sql.{DataFrame, QueryTest}
 import org.apache.spark.sql.catalyst.plans.logical.LogicalPlan
 import org.apache.spark.sql.execution.datasources._
 import scala.collection.JavaConverters._
 
-import com.microsoft.hyperspace.{Hyperspace, Implicits, SampleData, TestConfig}
+import com.microsoft.hyperspace.{Hyperspace, IcebergTestUtils, Implicits, SampleData, TestConfig}
 import com.microsoft.hyperspace.TestUtils.latestIndexLogEntry
 import com.microsoft.hyperspace.index.IndexConstants.REFRESH_MODE_QUICK
 import com.microsoft.hyperspace.index.plananalysis.{PlainTextMode, PlanAnalyzer}
 import com.microsoft.hyperspace.util.PathUtils
 import com.microsoft.hyperspace.util.PathUtils.DataPathFilter
 
-class IcebergIntegrationTest extends QueryTest with HyperspaceSuite {
+class IcebergIntegrationTest extends QueryTest with HyperspaceSuite with IcebergTestUtils {
   override val indexLocationDirName = "icebergIntegrationTest"
 
   private val sampleData = SampleData.testData
@@ -131,7 +128,7 @@ class IcebergIntegrationTest extends QueryTest with HyperspaceSuite {
       val dfFromSample = testData
         .toDF("Date", "RGUID", "Query", "imprs", "clicks")
 
-      createIcebergTableWithDayPartition(testPath, dfFromSample)
+      createIcebergTableWithPartitions(testPath, dfFromSample, "Date")
 
       dfFromSample.write
         .format("iceberg")
@@ -376,29 +373,15 @@ class IcebergIntegrationTest extends QueryTest with HyperspaceSuite {
   def isIndexUsed(plan: LogicalPlan, expectedPathsSubStr: String*): Boolean = {
     val rootPaths = plan.collect {
       case LogicalRelation(
-          HadoopFsRelation(location: InMemoryFileIndex, _, _, _, _, _),
-          _,
-          _,
-          _) =>
+            HadoopFsRelation(location: InMemoryFileIndex, _, _, _, _, _),
+            _,
+            _,
+            _) =>
         location.rootPaths
     }.flatten
     rootPaths.nonEmpty && rootPaths.forall(p =>
       expectedPathsSubStr.exists(p.toString.contains(_))) && expectedPathsSubStr.forall(p =>
       rootPaths.exists(_.toString.contains(p)))
-  }
-
-  def createIcebergTable(dataPath: String, sourceDf: DataFrame): Table = {
-    val props = Map(TableProperties.WRITE_NEW_DATA_LOCATION -> dataPath).asJava
-    val schema = SparkSchemaUtil.convert(sourceDf.schema)
-    val part = IcebergPartitionSpec.builderFor(schema).build()
-    new HadoopTables().create(schema, part, props, dataPath)
-  }
-
-  def createIcebergTableWithDayPartition(dataPath: String, sourceDf: DataFrame): Table = {
-    val props = Map(TableProperties.WRITE_NEW_DATA_LOCATION -> dataPath).asJava
-    val schema = SparkSchemaUtil.convert(sourceDf.schema)
-    val part = IcebergPartitionSpec.builderFor(schema).identity("Date").build()
-    new HadoopTables().create(schema, part, props, dataPath)
   }
 
   private def truncate(s: String): String = {

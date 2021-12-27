@@ -18,13 +18,14 @@ package com.microsoft.hyperspace.index
 
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FileStatus, FileSystem, Path}
-import org.apache.spark.SparkFunSuite
+import org.apache.spark.sql.types.StructType
 import org.mockito.ArgumentMatchers.any
 import org.mockito.Mockito.{mock, when}
 
-import com.microsoft.hyperspace.{HyperspaceException, SparkInvolvedSuite}
+import com.microsoft.hyperspace.HyperspaceException
 import com.microsoft.hyperspace.actions.Constants
 import com.microsoft.hyperspace.index.IndexConstants.{REFRESH_MODE_FULL, REFRESH_MODE_INCREMENTAL}
+import com.microsoft.hyperspace.index.covering.CoveringIndex
 
 class IndexCollectionManagerTest extends HyperspaceSuite {
   private val testLogManagerFactory: IndexLogManagerFactory = new IndexLogManagerFactory {
@@ -47,13 +48,7 @@ class IndexCollectionManagerTest extends HyperspaceSuite {
 
           val entry = IndexLogEntry(
             indexPath.toString,
-            CoveringIndex(
-              CoveringIndex.Properties(
-                CoveringIndex.Properties
-                  .Columns(Seq("RGUID"), Seq("Date")),
-                "",
-                10,
-                Map())),
+            CoveringIndex(Seq("RGUID"), Seq("Date"), new StructType(), 10, Map()),
             Content(Directory(s"$indexPath/${IndexConstants.INDEX_VERSION_DIRECTORY_PREFIX}=0")),
             Source(SparkPlan(sourcePlanProperties)),
             Map())
@@ -99,13 +94,7 @@ class IndexCollectionManagerTest extends HyperspaceSuite {
 
       val entry = IndexLogEntry(
         str,
-        CoveringIndex(
-          CoveringIndex.Properties(
-            CoveringIndex.Properties
-              .Columns(Seq("RGUID"), Seq("Date")),
-            "",
-            10,
-            Map())),
+        CoveringIndex(Seq("RGUID"), Seq("Date"), new StructType(), 10, Map()),
         Content(Directory(s"$str/${IndexConstants.INDEX_VERSION_DIRECTORY_PREFIX}=0")),
         Source(SparkPlan(sourcePlanProperties)),
         Map())

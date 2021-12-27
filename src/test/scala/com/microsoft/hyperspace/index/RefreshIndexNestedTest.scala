@@ -24,6 +24,7 @@ import com.microsoft.hyperspace.{Hyperspace, HyperspaceException, MockEventLogge
 import com.microsoft.hyperspace.TestUtils.{getFileIdTracker, logManager}
 import com.microsoft.hyperspace.actions.{RefreshIncrementalAction, RefreshQuickAction}
 import com.microsoft.hyperspace.index.IndexConstants.REFRESH_MODE_INCREMENTAL
+import com.microsoft.hyperspace.index.covering.CoveringIndex
 import com.microsoft.hyperspace.telemetry.RefreshIncrementalActionEvent
 import com.microsoft.hyperspace.util.{FileUtils, PathUtils}
 import com.microsoft.hyperspace.util.PathUtils.DataPathFilter
@@ -40,11 +41,13 @@ class RefreshIndexNestedTest extends QueryTest with HyperspaceSuite {
 
   override def beforeAll(): Unit = {
     super.beforeAll()
+    spark.conf.set(IndexConstants.DEV_NESTED_COLUMN_ENABLED, "true")
     hyperspace = new Hyperspace(spark)
     FileUtils.delete(new Path(testDir))
   }
 
   override def afterAll(): Unit = {
+    spark.conf.unset(IndexConstants.DEV_NESTED_COLUMN_ENABLED)
     FileUtils.delete(new Path(testDir))
     super.afterAll()
   }
@@ -152,8 +155,8 @@ class RefreshIndexNestedTest extends QueryTest with HyperspaceSuite {
       // Check emitted events.
       MockEventLogger.emittedEvents match {
         case Seq(
-            RefreshIncrementalActionEvent(_, _, "Operation started."),
-            RefreshIncrementalActionEvent(_, _, msg)) =>
+              RefreshIncrementalActionEvent(_, _, "Operation started."),
+              RefreshIncrementalActionEvent(_, _, msg)) =>
           assert(msg.contains("Refresh incremental aborted as no source data change found."))
         case _ => fail()
       }
@@ -395,8 +398,8 @@ class RefreshIndexNestedTest extends QueryTest with HyperspaceSuite {
       }
 
       val indexLogEntry = getLatestStableLog(indexConfig.indexName)
-      assert(!indexLogEntry.hasLineageColumn)
-      assert(indexLogEntry.numBuckets === 20)
+      assert(!indexLogEntry.derivedDataset.canHandleDeletedFiles)
+      assert(indexLogEntry.derivedDataset.asInstanceOf[CoveringIndex].numBuckets === 20)
     }
   }
 

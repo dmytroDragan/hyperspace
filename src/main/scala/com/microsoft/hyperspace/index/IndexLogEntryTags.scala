@@ -16,7 +16,10 @@
 
 package com.microsoft.hyperspace.index
 
-import org.apache.spark.sql.execution.datasources.InMemoryFileIndex
+import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.execution.datasources.{FileIndex, InMemoryFileIndex}
+
+import com.microsoft.hyperspace.index.plananalysis.FilterReason
 
 object IndexLogEntryTags {
   // HYBRIDSCAN_REQUIRED indicates if Hybrid Scan is required for the index or not.
@@ -47,10 +50,36 @@ object IndexLogEntryTags {
   // INMEMORYFILEINDEX_HYBRID_SCAN stores InMemoryFileIndex including index data files and also
   // appended files for Hybrid Scan.
   val INMEMORYFILEINDEX_HYBRID_SCAN: IndexLogEntryTag[InMemoryFileIndex] =
-  IndexLogEntryTag[InMemoryFileIndex]("inMemoryFileIndexHybridScan")
+    IndexLogEntryTag[InMemoryFileIndex]("inMemoryFileIndexHybridScan")
 
   // INMEMORYFILEINDEX_HYBRID_SCAN_APPENDED stores InMemoryFileIndex including only appended files
   // for Hybrid Scan.
   val INMEMORYFILEINDEX_HYBRID_SCAN_APPENDED: IndexLogEntryTag[InMemoryFileIndex] =
-  IndexLogEntryTag[InMemoryFileIndex]("inMemoryFileIndexHybridScanAppended")
+    IndexLogEntryTag[InMemoryFileIndex]("inMemoryFileIndexHybridScanAppended")
+
+  // FILTER_REASONS stores reason strings for disqualification.
+  val FILTER_REASONS: IndexLogEntryTag[Seq[FilterReason]] =
+    IndexLogEntryTag[Seq[FilterReason]]("filterReasons")
+
+  // APPLIED_INDEX_RULES stores rule's names can apply the index to the plan.
+  val APPLICABLE_INDEX_RULES: IndexLogEntryTag[Seq[String]] =
+    IndexLogEntryTag[Seq[String]]("applicableIndexRules")
+
+  // FILTER_REASONS_ENABLED indicates whether whyNotAPI is enabled or not.
+  // If it's enabled, FILTER_REASONS and APPLIED_INDEX_RULES info will be tagged.
+  val INDEX_PLAN_ANALYSIS_ENABLED: IndexLogEntryTag[Boolean] =
+    IndexLogEntryTag[Boolean]("indexPlanAnalysisEnabled")
+
+  // DATASKIPPING_INDEX_DATA_PREDICATE stores the index predicate translated
+  // from the plan's filter or join condition.
+  val DATASKIPPING_INDEX_PREDICATE: IndexLogEntryTag[Option[Expression]] =
+    IndexLogEntryTag[Option[Expression]]("dataskippingIndexPredicate")
+
+  // DATASKIPPING_INDEX_FILEINDEX stores InMemoryFileIndex for the index data.
+  val DATASKIPPING_INDEX_FILEINDEX: IndexLogEntryTag[InMemoryFileIndex] =
+    IndexLogEntryTag[InMemoryFileIndex]("dataskippingIndexRelation")
+
+  // DATASKIPPING_INDEX_FILEINDEX stores InMemoryFileIndex for the source data.
+  val DATASKIPPING_SOURCE_FILEINDEX: IndexLogEntryTag[FileIndex] =
+    IndexLogEntryTag[FileIndex]("dataskippingSourceRelation")
 }

@@ -43,6 +43,7 @@ class CreateIndexNestedTest extends HyperspaceSuite with SQLHelper {
   override def beforeAll(): Unit = {
     super.beforeAll()
 
+    spark.conf.set(IndexConstants.DEV_NESTED_COLUMN_ENABLED, "true")
     hyperspace = new Hyperspace(spark)
     FileUtils.delete(new Path(testDir), isRecursive = true)
 
@@ -57,6 +58,7 @@ class CreateIndexNestedTest extends HyperspaceSuite with SQLHelper {
   }
 
   override def afterAll(): Unit = {
+    spark.conf.unset(IndexConstants.DEV_NESTED_COLUMN_ENABLED)
     FileUtils.delete(new Path(testDir), isRecursive = true)
     super.afterAll()
   }
@@ -74,10 +76,10 @@ class CreateIndexNestedTest extends HyperspaceSuite with SQLHelper {
         .count == 1)
     assert(
       hyperspace.indexes
-        .where(array_contains(col("includedColumns"), "__hs_nested.nested.leaf.cnt"))
+        .where(col("additionalStats.includedColumns").contains("__hs_nested.nested.leaf.cnt"))
         .count == 1)
     val colTypes = hyperspace.indexes
-      .select("schema")
+      .select("additionalStats.schema")
       .collect()
       .map(r => r.getString(0))
       .head
@@ -98,8 +100,8 @@ class CreateIndexNestedTest extends HyperspaceSuite with SQLHelper {
       "Indexed columns with wrong case are stored in metadata")
     assert(
       indexes.head
-        .getAs[WrappedArray[String]]("includedColumns")
-        .head == "__hs_nested.nested.leaf.cnt",
+        .getAs[Map[String, String]]("additionalStats")(
+          "includedColumns") == "__hs_nested.nested.leaf.cnt",
       "Included columns with wrong case are stored in metadata")
   }
 
@@ -135,12 +137,11 @@ class CreateIndexNestedTest extends HyperspaceSuite with SQLHelper {
   }
 
   test("Index creation fails since the dataframe has a join node.") {
-    val dfJoin = nonPartitionedDataDF
-      .join(nonPartitionedDataDF, nonPartitionedDataDF("Query") === nonPartitionedDataDF("Query"))
-      .select(
-        nonPartitionedDataDF("RGUID"),
-        nonPartitionedDataDF("Query"),
-        nonPartitionedDataDF("nested.leaf.cnt"))
+    val dfA = nonPartitionedDataDF.as("A")
+    val dfB = nonPartitionedDataDF.as("B")
+    val dfJoin = dfA
+      .join(dfB, dfA("Query") === dfB("Query"))
+      .select(dfA("RGUID"), dfA("Query"), dfA("nested.leaf.cnt"))
     val exception = intercept[HyperspaceException] {
       hyperspace.createIndex(dfJoin, indexConfig1)
     }
@@ -149,7 +150,8 @@ class CreateIndexNestedTest extends HyperspaceSuite with SQLHelper {
         "Only creating index over HDFS file based scan nodes is supported."))
   }
 
-  test("Check lineage in index records for partitioned data when partition key is not in config.") {
+  test(
+    "Check lineage in index records for partitioned data when partition key is not in config.") {
     withSQLConf(IndexConstants.INDEX_LINEAGE_ENABLED -> "true") {
       hyperspace.createIndex(partitionedDataDF, indexConfig2)
       val indexRecordsDF = spark.read.parquet(
@@ -202,6 +204,52 @@ class CreateIndexNestedTest extends HyperspaceSuite with SQLHelper {
         .map(r => r.getLong(0))
 
       lineageValues.forall(lineageRange.contains(_))
+    }
+  }
+
+  test("Disable index creation with nested columns until fully supported.") {
+    spark.conf.set(IndexConstants.DEV_NESTED_COLUMN_ENABLED, "false")
+    val exception = intercept[HyperspaceException] {
+      hyperspace.createIndex(nonPartitionedDataDF, indexConfig1)
+    }
+    assert(exception.getMessage.contains("Hyperspace does not support nested columns yet."))
+  }
+
+  test("Verify index creation with StructType column.") {
+    val indexConfig = IndexConfig("index1", Seq("nested"), Seq("clicks"))
+    val indexConfig2 = IndexConfig("index2", Seq("clicks"), Seq("nested"))
+    hyperspace.createIndex(nonPartitionedDataDF, indexConfig)
+    hyperspace.createIndex(nonPartitionedDataDF, indexConfig2)
+    assert(hyperspace.indexes.where(s"name = 'index1' ").count == 1)
+    assert(hyperspace.indexes.where(s"name = 'index2' ").count == 1)
+
+    import com.microsoft.hyperspace._
+    spark.enableHyperspace
+
+    {
+      val filter = nonPartitionedDataDF.filter(col("nested").isNotNull).select("nested", "clicks")
+      assert(
+        filter.queryExecution.optimizedPlan.toString
+          .contains("Hyperspace(Type: CI, Name: index1"))
+    }
+    {
+      val filter = nonPartitionedDataDF.filter("nested.id = \"id1\"").select("nested", "clicks")
+      assert(
+        filter.queryExecution.optimizedPlan.toString
+          .contains("Hyperspace(Type: CI, Name: index1"))
+    }
+    {
+      val filter =
+        nonPartitionedDataDF.filter("nested.id = \"id1\"").select("nested.id", "clicks")
+      assert(
+        filter.queryExecution.optimizedPlan.toString
+          .contains("Hyperspace(Type: CI, Name: index1"))
+    }
+    {
+      val filter = nonPartitionedDataDF.filter("clicks = 1000").select("nested", "clicks")
+      assert(
+        filter.queryExecution.optimizedPlan.toString
+          .contains("Hyperspace(Type: CI, Name: index2"))
     }
   }
 }

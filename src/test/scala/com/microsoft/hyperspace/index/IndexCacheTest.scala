@@ -18,12 +18,12 @@ package com.microsoft.hyperspace.index
 
 import org.apache.hadoop.fs.Path
 import org.apache.hadoop.yarn.util.Clock
-import org.apache.spark.SparkFunSuite
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
 
-import com.microsoft.hyperspace.{Hyperspace, HyperspaceException, SampleData, SparkInvolvedSuite}
+import com.microsoft.hyperspace.{Hyperspace, HyperspaceException, SampleData}
 import com.microsoft.hyperspace.actions.Constants
+import com.microsoft.hyperspace.index.covering.CoveringIndex
 import com.microsoft.hyperspace.util.FileUtils
 
 class IndexCacheTest extends HyperspaceSuite {
@@ -49,13 +49,7 @@ class IndexCacheTest extends HyperspaceSuite {
 
     val entry = IndexLogEntry(
       "index1",
-      CoveringIndex(
-        CoveringIndex.Properties(
-          CoveringIndex.Properties
-            .Columns(Seq("RGUID"), Seq("Date")),
-          IndexLogEntry.schemaString(schema),
-          10,
-          Map())),
+      CoveringIndex(Seq("RGUID"), Seq("Date"), schema, 10, Map()),
       Content(Directory(indexDir)),
       Source(SparkPlan(sourcePlanProperties)),
       Map())
@@ -154,7 +148,7 @@ class IndexCacheTest extends HyperspaceSuite {
 
 /**
  * Mock for testing purposes so we can validate and invalidate entries based on time.
-
+ *
  * @param time Current time.
  */
 class MockClock(private var time: Long = 0L) extends Clock {

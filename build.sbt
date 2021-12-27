@@ -20,7 +20,7 @@ import Path.relativeTo
 lazy val scala212 = "2.12.8"
 lazy val scala211 = "2.11.12"
 
-scalaVersion := scala212
+ThisBuild / scalaVersion := scala212
 
 ThisBuild / scalacOptions ++= Seq("-target:jvm-1.8")
 
@@ -29,7 +29,7 @@ ThisBuild / javaOptions += "-Xmx1024m"
 // The root project is a virtual project aggregating the other projects.
 // It cannot compile, as necessary utility code is only in those projects.
 lazy val root = (project in file("."))
-  .aggregate(spark2_4, spark3_0)
+  .aggregate(spark2_4, spark3_0, spark3_1)
   .settings(
     compile / skip := true,
     publish / skip := true,
@@ -55,6 +55,15 @@ lazy val spark3_0 = (project in file("spark3.0"))
     inConfig(Compile)(addSparkVersionSpecificSourceDirectories),
     inConfig(Test)(addSparkVersionSpecificSourceDirectories))
 
+lazy val spark3_1 = (project in file("spark3.1"))
+  .enablePlugins(BuildInfoPlugin)
+  .settings(
+    commonSettings,
+    sparkVersion := Version(3, 1, 1),
+    crossScalaVersions := List(scala212), // Spark 3 doesn't support Scala 2.11
+    inConfig(Compile)(addSparkVersionSpecificSourceDirectories),
+    inConfig(Test)(addSparkVersionSpecificSourceDirectories))
+
 lazy val sparkVersion = settingKey[Version]("sparkVersion")
 
 // In addition to the usual scala/ and scala-<version>/ source directories,
@@ -72,16 +81,13 @@ lazy val addSparkVersionSpecificSourceDirectories = unmanagedSourceDirectories +
 lazy val commonSettings = Seq(
   // The following creates target/scala-2.*/src_managed/main/sbt-buildinfo/BuildInfo.scala.
   buildInfoKeys := Seq[BuildInfoKey](
-    name,
     version,
-    scalaVersion,
-    sbtVersion,
     sparkVersion,
     "sparkShortVersion" -> sparkVersion.value.short),
   buildInfoPackage := "com.microsoft.hyperspace",
 
   name := "hyperspace-core",
-  moduleName := name.value + s"_spark${sparkVersion.value.short}",
+  moduleName := name.value + s"-spark${sparkVersion.value.short}",
   libraryDependencies ++= deps(sparkVersion.value),
 
   // Scalastyle
@@ -120,6 +126,11 @@ ThisBuild / Test / parallelExecution := false
 ThisBuild / Test / fork := true
 
 ThisBuild / Test / javaOptions += "-Xmx1024m"
+
+// Needed to test both non-codegen and codegen parts of expressions
+ThisBuild / Test / envVars += "SPARK_TESTING" -> "1"
+
+ThisBuild / coverageExcludedPackages := "com\\.fasterxml.*;com\\.microsoft\\.hyperspace\\.shim"
 
 /**
  * Release configurations
@@ -170,7 +181,12 @@ ThisBuild / developers := List(
     id = "thugsatbay",
     name = "Gurleen Singh",
     email = "",
-    url = url("https://github.com/thugsatbay")))
+    url = url("https://github.com/thugsatbay")),
+  Developer(
+    id = "clee704",
+    name = "Chungmin Lee",
+    email = "",
+    url = url("https://github.com/clee704")))
 
 ThisBuild / description := "Hyperspace: An Indexing Subsystem for Apache Spark"
 ThisBuild / licenses := List(

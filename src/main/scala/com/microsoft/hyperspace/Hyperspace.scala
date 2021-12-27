@@ -20,7 +20,8 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 
 import com.microsoft.hyperspace.index._
 import com.microsoft.hyperspace.index.IndexConstants.{OPTIMIZE_MODE_QUICK, REFRESH_MODE_FULL}
-import com.microsoft.hyperspace.index.plananalysis.PlanAnalyzer
+import com.microsoft.hyperspace.index.plananalysis.{CandidateIndexAnalyzer, PlanAnalyzer}
+import com.microsoft.hyperspace.index.rules.ApplyHyperspace.withHyperspaceRuleDisabled
 import com.microsoft.hyperspace.index.sources.FileBasedSourceProviderManager
 
 class Hyperspace(spark: SparkSession) {
@@ -39,8 +40,10 @@ class Hyperspace(spark: SparkSession) {
    * @param df the DataFrame object to build index on.
    * @param indexConfig the configuration of index to be created.
    */
-  def createIndex(df: DataFrame, indexConfig: IndexConfig): Unit = {
-    indexManager.create(df, indexConfig)
+  def createIndex(df: DataFrame, indexConfig: IndexConfigTrait): Unit = {
+    withHyperspaceRuleDisabled {
+      indexManager.create(df, indexConfig)
+    }
   }
 
   /**
@@ -62,9 +65,10 @@ class Hyperspace(spark: SparkSession) {
   }
 
   /**
-   * Does hard delete of indexes marked as `DELETED`.
+   * Does hard delete of the entire indexes if it is marked as `DELETED`.
+   * Does clean up index (hard delete of the old indexes) if the index is 'ACTIVE'.
    *
-   * @param indexName Name of the index to restore.
+   * @param indexName Name of the index to vacuum.
    */
   def vacuumIndex(indexName: String): Unit = {
     indexManager.vacuum(indexName)
@@ -87,7 +91,9 @@ class Hyperspace(spark: SparkSession) {
    * @param mode Refresh mode. Currently supported modes are `incremental` and `full`.
    */
   def refreshIndex(indexName: String, mode: String): Unit = {
-    indexManager.refresh(indexName, mode)
+    withHyperspaceRuleDisabled {
+      indexManager.refresh(indexName, mode)
+    }
   }
 
   /**
@@ -102,7 +108,7 @@ class Hyperspace(spark: SparkSession) {
    * @param indexName Name of the index to optimize.
    */
   def optimizeIndex(indexName: String): Unit = {
-    indexManager.optimize(indexName, OPTIMIZE_MODE_QUICK)
+    optimizeIndex(indexName, OPTIMIZE_MODE_QUICK)
   }
 
   /**
@@ -125,7 +131,9 @@ class Hyperspace(spark: SparkSession) {
    *             files, based on a threshold. "full" refers to recreation of index.
    */
   def optimizeIndex(indexName: String, mode: String): Unit = {
-    indexManager.optimize(indexName, mode)
+    withHyperspaceRuleDisabled {
+      indexManager.optimize(indexName, mode)
+    }
   }
 
   /**
@@ -143,14 +151,14 @@ class Hyperspace(spark: SparkSession) {
   }
 
   /**
-   * Explains how indexes will be applied to the given dataframe.
+   * Explain how indexes will be applied to the given dataframe.
    *
    * @param df dataFrame.
    * @param redirectFunc optional function to redirect output of explain.
    * @param verbose Flag to enable verbose mode.
    */
-  def explain(df: DataFrame, verbose: Boolean = false)(
-      implicit redirectFunc: String => Unit = print): Unit = {
+  def explain(df: DataFrame, verbose: Boolean = false)(implicit
+      redirectFunc: String => Unit = print): Unit = {
     redirectFunc(PlanAnalyzer.explainString(df, spark, indexManager.indexes, verbose))
   }
 
@@ -162,6 +170,25 @@ class Hyperspace(spark: SparkSession) {
    */
   def index(indexName: String): DataFrame = {
     indexManager.index(indexName)
+  }
+
+  /**
+   * Explain why indexes are not applied to the given dataframe.
+   *
+   * @param df Dataframe
+   * @param indexName Optional index name to filter out the output
+   * @param extended If true, print more verbose messages.
+   * @param redirectFunc Optional function to redirect output
+   */
+  def whyNot(df: DataFrame, indexName: String = "", extended: Boolean = false)(
+      implicit redirectFunc: String => Unit = print): Unit = {
+    withHyperspaceRuleDisabled {
+      if (indexName.nonEmpty) {
+        redirectFunc(CandidateIndexAnalyzer.whyNotIndexString(spark, df, indexName, extended))
+      } else {
+        redirectFunc(CandidateIndexAnalyzer.whyNotIndexesString(spark, df, extended))
+      }
+    }
   }
 }
 

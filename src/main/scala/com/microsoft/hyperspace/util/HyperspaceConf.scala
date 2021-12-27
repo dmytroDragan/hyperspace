@@ -18,12 +18,29 @@ package com.microsoft.hyperspace.util
 
 import org.apache.spark.sql.SparkSession
 
+import com.microsoft.hyperspace.HyperspaceException
 import com.microsoft.hyperspace.index.IndexConstants
 
 /**
  * Helper class to extract Hyperspace-related configs from SparkSession.
  */
 object HyperspaceConf {
+
+  /**
+   * Returns the config value whether hyperspace is enabled or not.
+   */
+  def hyperspaceApplyEnabled(spark: SparkSession): Boolean = {
+    spark.conf
+      .get(
+        IndexConstants.HYPERSPACE_APPLY_ENABLED,
+        IndexConstants.HYPERSPACE_APPLY_ENABLED_DEFAULT)
+      .toBoolean
+  }
+
+  def setHyperspaceApplyEnabled(spark: SparkSession, apply: Boolean): Unit = {
+    spark.conf.set(IndexConstants.HYPERSPACE_APPLY_ENABLED, apply.toString)
+  }
+
   def hybridScanEnabled(spark: SparkSession): Boolean = {
     spark.conf
       .get(
@@ -95,6 +112,109 @@ object HyperspaceConf {
       .getConfString(
         "spark.hyperspace.index.sources.defaultFileBasedSource.supportedFileFormats",
         "avro,csv,json,orc,parquet,text")
+  }
+
+  def nestedColumnEnabled(spark: SparkSession): Boolean = {
+    spark.conf
+      .get(
+        IndexConstants.DEV_NESTED_COLUMN_ENABLED,
+        IndexConstants.DEV_NESTED_COLUMN_ENABLED_DEFAULT)
+      .toBoolean
+  }
+
+  object ZOrderCovering {
+    def targetSourceBytesPerPartition(spark: SparkSession): Long = {
+      spark.conf
+        .get(
+          IndexConstants.INDEX_ZORDER_TARGET_SOURCE_BYTES_PER_PARTITION,
+          IndexConstants.INDEX_ZORDER_TARGET_SOURCE_BYTES_PER_PARTITION_DEFAULT)
+        .toLong
+    }
+
+    def quantileBasedZAddressEnabled(spark: SparkSession): Boolean = {
+      spark.conf
+        .get(
+          IndexConstants.INDEX_ZORDER_QUANTILE_ENABLED,
+          IndexConstants.INDEX_ZORDER_QUANTILE_ENABLED_DEFAULT)
+        .toBoolean
+    }
+
+    def quantileBasedZAddressRelativeError(spark: SparkSession): Double = {
+      spark.conf
+        .get(
+          IndexConstants.INDEX_ZORDER_QUANTILE_RELATIVE_ERROR,
+          IndexConstants.INDEX_ZORDER_QUANTILE_RELATIVE_ERROR_DEFAULT)
+        .toDouble
+    }
+  }
+
+  object DataSkipping {
+    def targetIndexDataFileSize(spark: SparkSession): Long = {
+      // TODO: Consider using a systematic way to validate the config value
+      // like Spark's ConfigBuilder
+      val value = spark.conf
+        .get(
+          IndexConstants.DATASKIPPING_TARGET_INDEX_DATA_FILE_SIZE,
+          IndexConstants.DATASKIPPING_TARGET_INDEX_DATA_FILE_SIZE_DEFAULT)
+      val longValue =
+        try {
+          value.toLong
+        } catch {
+          case e: NumberFormatException =>
+            throw HyperspaceException(
+              s"${IndexConstants.DATASKIPPING_TARGET_INDEX_DATA_FILE_SIZE} " +
+                s"should be long, but was $value")
+        }
+      if (longValue <= 0) {
+        throw HyperspaceException(
+          s"${IndexConstants.DATASKIPPING_TARGET_INDEX_DATA_FILE_SIZE} " +
+            s"should be a positive number.")
+      }
+      longValue
+    }
+
+    def maxIndexDataFileCount(spark: SparkSession): Int = {
+      // TODO: Consider using a systematic way to validate the config value
+      // like Spark's ConfigBuilder
+      val value = spark.conf
+        .get(
+          IndexConstants.DATASKIPPING_MAX_INDEX_DATA_FILE_COUNT,
+          IndexConstants.DATASKIPPING_MAX_INDEX_DATA_FILE_COUNT_DEFAULT)
+      val intValue =
+        try {
+          value.toInt
+        } catch {
+          case e: NumberFormatException =>
+            throw HyperspaceException(
+              s"${IndexConstants.DATASKIPPING_MAX_INDEX_DATA_FILE_COUNT} " +
+                s"should be int, but was $value")
+        }
+      if (intValue <= 0) {
+        throw HyperspaceException(
+          s"${IndexConstants.DATASKIPPING_MAX_INDEX_DATA_FILE_COUNT} " +
+            s"should be a positive number.")
+      }
+      intValue
+    }
+
+    def autoPartitionSketch(spark: SparkSession): Boolean = {
+      // TODO: Consider using a systematic way to validate the config value
+      // like Spark's ConfigBuilder
+      val value = spark.conf
+        .get(
+          IndexConstants.DATASKIPPING_AUTO_PARTITION_SKETCH,
+          IndexConstants.DATASKIPPING_AUTO_PARTITION_SKETCH_DEFAULT)
+      val booleanValue =
+        try {
+          value.toBoolean
+        } catch {
+          case e: IllegalArgumentException =>
+            throw HyperspaceException(
+              s"${IndexConstants.DATASKIPPING_AUTO_PARTITION_SKETCH} " +
+                s"should be boolean, but was $value")
+        }
+      booleanValue
+    }
   }
 
   /**

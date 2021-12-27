@@ -28,6 +28,8 @@ import org.apache.spark.sql.hyperspace.utils.logicalPlanToDataFrame
 
 import com.microsoft.hyperspace.{HyperspaceException, Implicits}
 import com.microsoft.hyperspace.index.IndexConstants
+import com.microsoft.hyperspace.index.plans.logical.IndexHadoopFsRelation
+import com.microsoft.hyperspace.shim.ExtractFileSourceScanExecRelation
 
 /**
  * Provides helper methods for explain API.
@@ -124,6 +126,10 @@ object PlanAnalyzer {
         outputStream,
         spark)
       outputStream.writeLine()
+
+      buildHeader(outputStream, "Applicable indexes:")
+      outputStream.write(CandidateIndexAnalyzer.applicableIndexInfoString(spark, df))
+      outputStream.writeLine()
     }
 
     outputStream.withTag()
@@ -138,14 +144,8 @@ object PlanAnalyzer {
   private def getPaths(sparkPlan: SparkPlan): Seq[String] = {
     val usedPaths = new ListBuffer[String]
     sparkPlan.foreach {
-      case FileSourceScanExec(
-          HadoopFsRelation(location: InMemoryFileIndex, _, _, _, _, _),
-          _,
-          _,
-          _,
-          _,
-          _,
-          _) =>
+      case ExtractFileSourceScanExecRelation(
+            HadoopFsRelation(location: InMemoryFileIndex, _, _, _, _, _)) =>
         usedPaths += location.rootPaths.head.getParent.toString
       case other =>
         other.subqueries.foreach { subQuery =>
@@ -213,7 +213,13 @@ object PlanAnalyzer {
       plan: SparkPlan,
       indexes: DataFrame,
       bufferStream: BufferStream): Unit = {
-    val usedIndexes = indexes.filter(indexes("indexLocation").isin(getPaths(plan): _*))
+    val usedIndexNames = plan.collect {
+      case ExtractFileSourceScanExecRelation(rel: IndexHadoopFsRelation) =>
+        rel.indexName
+    }
+    val usedIndexes = indexes.filter(
+      indexes("indexLocation").isin(getPaths(plan): _*) ||
+        indexes("name").isin(usedIndexNames: _*))
     usedIndexes.collect().foreach { row =>
       bufferStream
         .write(row.getAs("name").toString)
